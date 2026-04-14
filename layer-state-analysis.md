@@ -289,7 +289,76 @@ async do() {
 }
 ```
 
-### 3.4 Canvas 重新绘制机制
+### 3.4 混合模式设置
+
+**实现文件**: [src/js/modules/layer/composition.js](src/js/modules/layer/composition.js)
+
+混合模式通过 Canvas 2D API 的 `globalCompositeOperation` 实现，支持 28 种混合模式：
+
+```javascript
+composition() {
+    var compositions = [
+        "-- Default --",
+        "color", "color-burn", "color-dodge", "copy", "darken", "darker",
+        "destination-atop", "destination-in", "destination-out", "destination-over",
+        "difference", "exclusion", "hard-light", "hue", "lighten", "lighter",
+        "luminosity", "multiply", "overlay", "saturation", "screen", "soft-light",
+        "source-atop", "source-in", "source-out", "source-over", "xor"
+    ];
+    
+    // 弹出对话框选择混合模式
+    var settings = {
+        title: 'Composition',
+        params: [
+            {name: "composition", title: "Composition:", value: config.layer.composition, values: compositions},
+        ],
+        on_change: function (params, canvas_preview, w, h) {
+            // 实时预览：直接修改状态并触发渲染
+            config.layer.composition = params.composition;
+            config.need_render = true;
+        },
+        on_finish: function (params) {
+            // 确认后通过 Action 正式修改（支持撤销）
+            app.State.do_action(
+                new app.Actions.Bundle_action('change_composition', 'Change Composition', [
+                    new app.Actions.Update_layer_action(config.layer.id, {
+                        composition: params.composition
+                    })
+                ])
+            );
+        },
+        on_cancel: function (params) {
+            // 取消时恢复原值
+            config.layer.composition = initial_composition;
+            config.need_render = true;
+        }
+    };
+}
+```
+
+**渲染时的应用** ([base-layers.js](src/js/core/base-layers.js#L250-L260)):
+
+```javascript
+render_objects(ctx, tempCanvas, layers, prepare, shouldSkip) {
+    for (var i = layers.length - 1; i >= 0; i--) {
+        var layer = layers[i];
+        
+        // 设置透明度和混合模式
+        ctx.globalAlpha = layer.opacity / 100;
+        ctx.globalCompositeOperation = layer.composition;
+        
+        this.render_object(ctx, layer);
+    }
+}
+```
+
+**特点**:
+- 支持实时预览：对话框中修改时直接作用于 `config.layer.composition`
+- 确认后才创建 Action，支持撤销
+- 取消时恢复原值
+- 使用 `source-atop` 可实现剪贴蒙版效果
+
+### 3.5 Canvas 重新绘制机制
 
 **渲染触发** ([base-layers.js](src/js/core/base-layers.js#L95-L105)):
 
@@ -365,7 +434,7 @@ requestAnimationFrame(function () {
 });
 ```
 
-### 3.5 属性修改后的更新流程
+### 3.6 属性修改后的更新流程
 
 以更新图层属性为例 ([update-layer.js](src/js/actions/update-layer.js)):
 
@@ -470,55 +539,6 @@ export class Bundle_action extends Base_action {
             await this.actions_to_do[i].undo();
         }
         config.need_render = true;
-    }
-}
-```
-
-### 4.5 Undo/Redo 机制
-
-**状态管理** ([base-state.js](src/js/core/base-state.js)):
-
-```javascript
-class Base_state_class {
-    constructor() {
-        this.action_history = [];        // 操作历史数组
-        this.action_history_index = 0;   // 当前位置指针
-        this.action_history_max = 50;    // 最大历史记录数
-    }
-
-    async do_action(action) {
-        // 执行操作
-        await action.do();
-        
-        // 清除 redo 历史
-        if (this.action_history_index < this.action_history.length) {
-            this.action_history = this.action_history.slice(0, this.action_history_index);
-        }
-        
-        // 添加到历史
-        this.action_history.push(action);
-        this.action_history_index++;
-        
-        // 超出限制时释放旧操作
-        if (this.action_history.length > this.action_history_max) {
-            let action_to_free = this.action_history.shift();
-            await action_to_free.free();
-        }
-    }
-
-    async undo() {
-        if (this.can_undo()) {
-            this.action_history_index--;
-            await this.action_history[this.action_history_index].undo();
-        }
-    }
-
-    async redo() {
-        if (this.can_redo()) {
-            const action = this.action_history[this.action_history_index];
-            await action.do();
-            this.action_history_index++;
-        }
     }
 }
 ```
