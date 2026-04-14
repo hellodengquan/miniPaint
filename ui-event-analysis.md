@@ -173,23 +173,146 @@ var settings = {
 POP.show(settings);
 ```
 
-#### 弹窗生命周期
+#### 弹窗生命周期：创建 → 显示 → 销毁
 
+##### 阶段 1：创建与显示 (`show()` 方法)
+
+```javascript
+// 入口调用：POP.show(settings)
+show(config) {
+    this.previousPOP = window.POP;  // 栈式管理：保存上一个弹窗实例
+    window.POP = this;              // 当前实例设为全局
+    
+    if (this.active == true) {
+        this.hide();                // 已有弹窗则先销毁
+    }
+
+    // 保存配置
+    this.title = config.title || '';
+    this.parameters = config.params || [];
+    this.onfinish = config.on_finish || false;
+    this.oncancel = config.on_cancel || false;
+    this.preview = config.preview || false;
+    this.onchange = config.on_change || false;
+    this.onload = config.on_load || false;
+    // ... 更多配置
+
+    // 【创建 DOM 元素】
+    this.el = document.createElement('div');
+    this.el.classList = 'popup';
+    this.el.role = 'dialog';
+    document.querySelector('#popups').appendChild(this.el);
+    
+    this.show_action();              // 渲染内部内容
+    this.set_events();               // 【关键】绑定全局事件监听器
+}
 ```
-POP.show(settings)
-    ├─ 创建 <div class="popup"> 追加到 #popups
-    ├─ 根据 params 配置动态生成表单 HTML
-    ├─ 初始化 colorInput 等自定义组件
-    ├─ 绑定 OK/Cancel/Close/Esc 事件
-    └─ 调用 on_load 回调
-        ↓
-用户交互 → onChangeEvent() → 调用 on_change 实时预览
-        ↓
-点击 OK / Cancel
-    ├─ 收集所有表单值 → get_params()
-    ├─ 调用 on_finish / on_cancel 回调
-    └─ 从 DOM 移除弹窗元素，清理事件监听器
+
+##### 阶段 2：事件监听绑定机制 (`set_events()`)
+
+**非常重要的设计**：弹窗不直接在 DOM 元素上绑定事件，而是使用**可追踪的事件句柄数组**：
+
+```javascript
+// 自定义的 addEventListener 包装方法
+addEventListener(target, type, listener, options) {
+    target.addEventListener(type, listener, options);
+    const handle = {
+        target, type, listener,
+        remove() {
+            target.removeEventListener(type, listener);  // 记住解绑方法
+        }
+    };
+    this.eventHandles.push(handle);  // 存入数组，稍后统一清理
+}
+
+// set_events 中注册的全局监听器（这些都是绑定在 document/window 上的！）
+set_events() {
+    // 1. 按 Esc 关闭弹窗 → 绑定在 document
+    this.addEventListener(document, 'keydown', ...)
+    
+    // 2. 拖拽标题移动弹窗 → 3 个事件都绑定在 document
+    this.addEventListener(document, 'mousedown', ...)
+    this.addEventListener(document, 'mousemove', ...)
+    this.addEventListener(document, 'mouseup', ...)
+    
+    // 3. 窗口大小变化时重置弹窗位置 → 绑定在 window
+    this.addEventListener(window, 'resize', ...)
+}
 ```
+
+> ⚠️ **关键点**：拖拽、Esc 这些事件都绑定在 `document` 上，如果不手动清理，会造成严重的**内存泄漏**！
+
+##### 阶段 3：销毁与清理 (`hide()` 方法)
+
+```javascript
+hide(success) {
+    // 1. 恢复弹窗栈
+    window.POP = this.previousPOP;
+    
+    // 2. 执行回调
+    var params = this.get_params();
+    if (success === false && this.oncancel) {
+        this.oncancel(params);
+    }
+
+    // 3. 【DOM 清理】从文档流中移除弹窗节点
+    if (this.el && this.el.parentNode) {
+        this.el.parentNode.removeChild(this.el);
+    }
+
+    // 4. 【状态重置】清空所有内部状态引用
+    this.parameters = [];
+    this.active = false;
+    this.preview = false;
+    this.preview_padding = 0;
+    this.onload = false;
+    this.onchange = false;
+    this.title = null;
+    this.className = '';
+    this.comment = '';
+    this.onfinish = false;
+    this.oncancel = false;
+
+    // 5. 【关键：事件解绑】移除所有 document/window 上的监听器
+    this.remove_events();
+}
+
+// 事件解绑的具体实现
+remove_events() {
+    // 遍历事件句柄数组，逐个调用 remove()
+    for (let handle of this.eventHandles) {
+        handle.remove();  // 调用每个句柄的 remove 方法
+    }
+    this.eventHandles = [];  // 清空句柄数组
+}
+```
+
+---
+
+#### 弹窗销毁的完整清理清单
+
+| 清理类别 | 具体清理内容 | 代码位置 |
+|---------|-------------|---------|
+| **DOM 节点** | 弹窗整个 `.popup` 元素从 `#popups` 容器移除 | `popup.js:143-145` |
+| **事件监听器** | 4 个 document 事件（keydown, mousedown, mousemove, mouseup）<br>1 个 window 事件（resize）<br>**通过句柄数组逐个解绑** | `popup.js:227-232` |
+| **回调函数引用** | `onload` / `onchange` / `onfinish` / `oncancel` 设为 false | `popup.js:150-156` |
+| **表单参数配置** | `parameters` 数组清空 | `popup.js:146` |
+| **状态标志** | `active` / `preview` 等布尔状态重置 | `popup.js:147-154` |
+| **弹窗栈恢复** | 全局 `window.POP` 恢复为上一个弹窗实例 | `popup.js:137` |
+
+---
+
+#### 设计优点与潜在问题
+
+✅ **优点**：
+- 使用句柄模式追踪事件绑定，解决了「匿名函数无法 removeEventListener」的经典问题
+- 栈式弹窗管理支持多层弹窗嵌套
+- 主动释放所有回调引用，避免闭包内存泄漏
+
+⚠️ **注意**：
+- `show_action()` 中还绑定了 OK/Cancel/Close 按钮的 click 事件、输入框 keyup 事件、colorInput change 事件
+- 这些事件绑定在弹窗内部 DOM 元素上，**随 DOM 移除自动清理**，不需要手动解绑
+- 只有 `document/window` 上的全局事件才需要通过 `remove_events()` 手动清理
 
 ### 3.2 参数传递机制
 
