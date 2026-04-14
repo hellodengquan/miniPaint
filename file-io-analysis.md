@@ -310,8 +310,8 @@ export_as_json() {
         "width": 800,
         "height": 600,
         "about": "...",
-        "date": "2024-01-15",
-        "version": "4.14.2",
+        "date": "<导出时的日期，格式 YYYY-MM-DD>",
+        "version": "<当前 miniPaint 版本号>",
         "layer_active": 1,
         "guides": []
     },
@@ -691,8 +691,3 @@ async export(canvas, type, options) {
 3. **错误处理增强**：提供更详细的错误信息和恢复建议
 4. **大文件支持**：考虑使用 IndexedDB 替代 localStorage 存储快速保存数据
 5. **Worker 线程**：将耗时的编码操作移到 Web Worker
-
----
-
-*报告生成时间：2024-01-15*
-*分析版本：miniPaint v4.14.2*
