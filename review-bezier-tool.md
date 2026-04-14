@@ -5,6 +5,11 @@
 **变更文件数**: 6
 **新增代码行数**: ~520行
 
+> 📝 **勘误说明**：感谢仔细核对！已修正三处初始分析错误：
+> 1. ✅ `base-tools.js` 仅添加了大括号，未修改 passive 事件绑定
+> 2. ✅ `helpers.js` 仅新增 `draw_control_point()`，`draw_special_line()` 为原有函数
+> 3. ✅ `mouseup` 中"恢复-提交"是项目标准设计模式，不是 Bug（polygon.js 也采用相同实现）
+
 ---
 
 ## 1. 提交整体概览
@@ -15,9 +20,9 @@
 |------|---------|---------|---------|
 | `src/js/tools/shapes/bezier_curve.js` | ✅ 新增 | 412 | 贝塞尔曲线工具核心实现 |
 | `src/js/config.js` | ✏️ 修改 | 8 | 注册新工具到工具列表 |
-| `src/js/core/base-tools.js` | ✏️ 修改 | 6 | 基类中修复事件绑定 |
-| `src/js/libs/helpers.js` | ✏️ 修改 | 29 | 新增2个绘图辅助函数 |
-| `src/js/tools/select.js` | ✏️ 修改 | 24 | 支持贝塞尔曲线控制点编辑 |
+| `src/js/core/base-tools.js` | ✏️ 修改 | 6 | 代码风格修正：给单行 if/else 添加大括号 |
+| `src/js/libs/helpers.js` | ✏️ 修改 | 29 | 新增 draw_control_point 控制点绘制函数 |
+| `src/js/tools/select.js` | ✏️ 修改 | 24 | 新增工具特定的选择渲染回调机制 |
 | `images/test-collection.json` | ✏️ 修改 | 48 | 测试数据集更新 |
 
 ### 1.2 提交目的
@@ -122,18 +127,19 @@ data: {
 2. `selected_object_actions()` 中用 `ctx.isPointInPath()` 检测命中
 3. 命中后设置 `mouse_lock = 'move_point'` 进入拖拽模式
 
-**关键问题**:
-❌ **严重 Bug**: `mouseup` 事件处理器（435-453行）
-```javascript
-// 第441行：错误的恢复逻辑
-config.layer.data = this.old_data;  // 先恢复旧数据...
+**"预览-提交"设计模式**（与 polygon.js 完全一致的标准模式）:
 
-// 第445-449行：却用新数据保存
-new app.Actions.Update_layer_action(config.layer.id, {
-    data: bezier,  // bezier 引用的是修改后的数据！
-})
-```
-**影响**: 撤销操作会恢复到错误的状态。
+**工作原理：
+1. **mousedown**：保存 `this.old_data = JSON.parse(JSON.stringify(config.layer.data))` 备份原始数据
+2. **mousemove**：直接修改 `config.layer.data` 做**实时预览**（不进历史记录）
+3. **mouseup**（435-453行）：
+   - `config.layer.data = this.old_data` 先**撤销预览修改**，恢复原始状态
+   - 用 `bezier`（引用修改后的数据）通过 `Update_layer_action` **正式提交**到历史记录
+
+✅ **这不是 Bug** - 这是保证：
+- 拖拽期间 UI 实时响应的正确做法
+- 确保 Undo/Redo 历史记录正确性的标准模式
+- 项目中已有工具通用的设计范式
 
 ---
 
@@ -158,15 +164,29 @@ new app.Actions.Update_layer_action(config.layer.id, {
 - ✅ `visible: false` 表示归属于"形状"工具组下
 - ✅ 默认线宽与其他绘图工具一致（4px）
 
-### 3.2 base-tools.js - 基类修复
+### 3.2 base-tools.js - 代码风格统一
 
-**修复内容**: 在 `touchmove` 事件监听器中添加了 `{passive: false}`
+**修改内容**: 仅给两处缺少大括号的单行 if/else 语句添加了大括号
 
-**原因**: 移动端需要调用 `event.preventDefault()` 阻止页面滚动
+```javascript
+// 修改前
+if (condition)
+    statement;
+else
+    statement;
+
+// 修改后
+if (condition) {
+    statement;
+}
+else {
+    statement;
+}
+```
 
 **评估**:
-- ✅ 修复合理，与其他工具事件处理保持一致
-- ✅ 不影响原有工具功能
+- ✅ 纯代码风格修正，无逻辑变化
+- ✅ 提高代码可读性，减少后续添加代码时出错概率
 
 ### 3.3 扩展机制合理性评估
 
@@ -181,32 +201,11 @@ new app.Actions.Update_layer_action(config.layer.id, {
 
 ## 4. helpers.js 新增辅助函数分析
 
-### 4.1 draw_special_line() - 双色辅助线
+> **说明**: `draw_special_line()` 是提交前就已存在的函数，**本次提交仅新增 `draw_control_point()` 一个函数**
 
-**文件**: `src/js/libs/helpers.js:616-633`
+### 4.1 draw_control_point() - 控制点绘制
 
-```javascript
-draw_special_line(ctx, start_x, start_y, end_x, end_y) {
-    const wholeLineWidth = 2 / config.ZOOM;
-    // 先画白线做背景
-    ctx.lineWidth = wholeLineWidth;
-    ctx.strokeStyle = 'rgb(255, 255, 255)';
-    // ...
-    // 中间画黑线做前景
-    ctx.lineWidth = halfLineWidth;
-    ctx.strokeStyle = 'rgb(0, 0, 0)';
-    // ...
-}
-```
-
-**评估**:
-- ✅ 命名清晰，准确表达"特殊可见性线条"含义
-- ✅ 正确处理缩放适配 (`/ config.ZOOM`)
-- ✅ 黑白双色确保在任何背景下都可见
-
-### 4.2 draw_control_point() - 控制点绘制
-
-**文件**: `src/js/libs/helpers.js:643-662`
+**文件**: `src/js/libs/helpers.js:636-665`
 
 ```javascript
 draw_control_point(ctx, x, y) {
@@ -267,9 +266,8 @@ if(config.layer.render_function != null) {
 
 | 问题位置 | 问题描述 | 建议 | 优先级 |
 |----------|---------|------|--------|
-| bezier_curve.js:441 | ❌ **撤销 Bug** | 移除错误的 `config.layer.data = this.old_data` | 🔴 高 |
 | bezier_curve.js:342 | `getElementById` 无检查 | 添加元素存在性判断 | 🟡 中 |
-| helpers.js:169 | `hexToRgb` 无正则失败处理 | 增加 try-catch 或验证 | 🟡 中 |
+| helpers.js:644-645 | `dx`/`dy` 变量声明但未使用 | 删除死代码 | � 低 |
 
 ### 6.3 代码风格一致性
 
@@ -310,28 +308,28 @@ constrainToAxis(mouse_x, mouse_y, ref_x, ref_y) {
 
 ### 7.2 主要问题 ❌
 
-1. **严重 Bug**: `mouseup` 中撤销恢复逻辑错误（第441行）
-2. **代码重复**：Ctrl 约束、Snap 处理逻辑多处重复
-3. **死代码**: 未使用的变量声明
-4. **一致性**: 部分代码风格与项目其他文件不一致
+1. **代码重复**：Ctrl 约束、Snap 处理逻辑在 4 处重复
+2. **死代码**: 未使用的 `dx`/`dy` 变量声明
+3. **风格一致性**: 部分代码缩进和分号使用与项目其他文件不一致
+4. **冗余代码**: `draw_bezier()` 中设置 `ctx.fillStyle` 但从未使用
 
 ### 7.3 总体评分
 
 | 维度 | 评分 (1-10) | 说明 |
 |------|------------|------|
-| **功能正确性** | 7/10 | 存在一个影响撤销的严重 Bug |
-| **代码质量** | 6/10 | 重复代码较多，风格不一致 |
-| **架构设计** | 9/10 | 扩展机制设计优秀 |
-| **交互体验** | 8/10 | 符合标准贝塞尔使用习惯 |
-| **可维护性** | 7/10 | 无注释但结构清晰 |
+| **功能正确性** | 9/10 | 正确实现了"预览-提交"模式，无功能性 Bug |
+| **代码质量** | 7/10 | 有代码重复问题，但整体结构清晰 |
+| **架构设计** | 9/10 | 完美融入现有扩展机制，设计优秀 |
+| **交互体验** | 8/10 | 符合标准贝塞尔曲线使用习惯 |
+| **可维护性** | 8/10 | 遵循现有设计范式，易于理解 |
 
-**综合评分**: **7.4/10** - 良好的功能实现，建议修复撤销 Bug 和代码重复后合并。
+**综合评分**: **8.2/10** - 高质量的功能实现，与现有架构融合非常好。建议修复代码重复和清理死代码后合并。
 
 ---
 
 ## 8. 行动建议
 
-1. **立即修复**: `bezier_curve.js:441` 撤销 Bug
-2. **重构**: 提取 `constrainToAxis` 和 `applySnap` 公共方法消除重复
-3. **清理**: 删除未使用的 `dx`/`dy` 变量和无效代码
-4. **优化**: 所有控制点更新都通过 State action，支持完整撤销历史
+1. **重构**: 提取 `constrainToAxis()` 和 `applySnap()` 公共方法消除重复代码
+2. **清理**: 删除 `helpers.js:644-645` 未使用的 `dx`/`dy` 变量
+3. **清理**: 删除 `bezier_curve.js:313` 未使用的 `ctx.fillStyle` 设置
+4. **风格统一**: 统一代码缩进和分号使用风格
