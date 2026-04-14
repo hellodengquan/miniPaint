@@ -72,13 +72,23 @@ constructor() {
 
 #### 阶段1：快捷键触发
 ```
-用户按下 F3
+用户按下 F3 或 Ctrl/Cmd+F
   ↓
 document keydown 事件触发 (line:30-41)
   ↓
 检查是否已有弹窗打开（通过 get_active_instances）
   ↓
 调用 this.search()
+  ↓
+阻止浏览器默认搜索行为(event.preventDefault)
+```
+
+**实际代码支持两路触发** (line:36):
+```javascript
+if (code == "F3" || ((event.ctrlKey == true || event.metaKey) && code == "f")) {
+    this.search();
+    event.preventDefault();
+}
 ```
 
 #### 阶段2：弹窗显示与初始化
