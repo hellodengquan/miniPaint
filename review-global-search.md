@@ -73,12 +73,17 @@ Base_search_class
 
 ### 2.3 完整调用链路
 
+搜索功能支持两种快捷键触发方式：
+
+#### 链路 A：F3 快捷键
 ```
 用户按下 F3
     ↓
-Keyboard shortcut 触发 Tools_search_class.search()
+Base_search_class.events() 中的 keydown 监听器捕获
     ↓
-调用 Base_search_class.search()
+检查 POP.get_active_instances() === 0（确保没有其他弹窗打开）
+    ↓
+调用 this.search() 打开搜索弹窗
     ↓
 【懒加载索引】首次调用时从 Base_gui.modules 构建 db
     ↓
@@ -102,6 +107,25 @@ get_function_from_path() 解析出模块类和函数名
     ↓
 class_object[function_name]() 反射调用执行
 ```
+
+#### 链路 B：Ctrl/Cmd+F 快捷键
+```
+用户按下 Ctrl+F (Windows/Linux) 或 Cmd+F (macOS)
+    ↓
+Base_search_class.events() 中的 keydown 监听器捕获
+    ↓
+条件判断：(event.ctrlKey == true || event.metaKey) && code == "f"
+    ↓
+与 F3 共用同一个处理逻辑，调用 this.search()
+    ↓
+后续流程与链路 A 完全一致
+```
+
+**注意**：
+- `event.metaKey` 用于检测 macOS 的 Command 键
+- `event.ctrlKey` 用于检测 Windows/Linux 的 Ctrl 键
+- 浏览器默认的 "查找页面内容" 快捷键被 `event.preventDefault()` 阻止
+- 两种快捷键都需要满足 `POP.get_active_instances() === 0` 才能触发
 
 ### 2.4 关键代码解析
 
@@ -299,21 +323,99 @@ node.appendChild(div);
 
 ### 5.4 循环依赖风险
 
-**依赖关系**：
+#### 直接依赖关系
+
 ```
-base-search.js → base-gui.js (通过 import)
+base-search.js → base-gui.js (import Base_gui_class)
 base-gui.js → popup.js
-popup.js → base-gui.js (通过 import)
+popup.js → base-gui.js (import Base_gui_class)
 ```
 
-**当前情况**：
-- base-search.js 中通过 `new Base_gui_class()` 获取实例
-- 但 base-gui.js 是单例模式，实际上返回的是同一个实例
-- 没有直接循环依赖，但架构上 base-search 放在 core 层却依赖 GUI 层不太合理
+#### 间接循环依赖（通过 modules 加载）
+
+更复杂的循环依赖发生在运行时模块加载阶段：
+
+```
+main.js
+    ├── import Base_gui_class → 实例化 GUI
+    │       └── load_modules() 动态加载 modules/ 下所有模块
+    │               └── 加载 modules/tools/search.js
+    │                       └── import Base_search_class
+    │                               └── import Base_gui_class ← 循环!
+    └── import Base_search_class → 实例化 Search
+```
+
+**详细分析**：
+
+1. **base-gui.js 加载 modules**：
+```javascript
+// base-gui.js
+load_modules() {
+    var modules_context = require.context("./../modules/", true, /\.js$/);
+    modules_context.keys().forEach(function (key) {
+        var moduleKey = key.replace('./', '').replace('.js', '');
+        var classObj = modules_context(key);
+        _this.modules[moduleKey] = new classObj.default();  // 实例化每个模块
+    });
+}
+```
+
+2. **modules/tools/search.js 被加载时**：
+```javascript
+// modules/tools/search.js
+import Base_search_class from './../../core/base-search.js';  // ← 触发 base-search 加载
+
+class Tools_search_class {
+    constructor() {
+        this.Base_search = new Base_search_class();  // ← 实例化
+    }
+}
+```
+
+3. **base-search.js 中再次实例化 Base_gui**：
+```javascript
+// base-search.js
+import Base_gui_class from './base-gui.js';  // ← 循环依赖点
+
+class Base_search_class {
+    constructor() {
+        this.Base_gui = new Base_gui_class();  // ← 再次实例化 GUI!
+    }
+}
+```
+
+**为什么没出问题**：
+
+- base-gui.js 使用单例模式，构造函数中 `if (instance) return instance;`
+- 当 base-search.js 中 `new Base_gui_class()` 时，实际返回的是 main.js 中创建的那个实例
+- 所以虽然代码上看起来有循环依赖，但运行时是安全的
+
+**潜在风险**：
+
+1. **初始化顺序依赖**：如果 base-search.js 比 main.js 先执行，单例会指向错误实例
+2. **测试困难**：单元测试时难以 mock 依赖
+3. **架构混乱**：core 层和 modules 层相互引用，违反分层原则
 
 **建议**：
-- 考虑将搜索功能移到 modules/tools/ 目录
-- 或者通过依赖注入传入 Base_gui 实例，而非直接 import
+
+```javascript
+// 方案 1：依赖注入
+class Base_search_class {
+    constructor(base_gui) {
+        this.Base_gui = base_gui;  // 外部传入，而非自己 new
+    }
+}
+
+// 方案 2：通过 app 全局对象获取
+class Base_search_class {
+    constructor() {
+        this.Base_gui = app.GUI;  // 从全局 app 获取已初始化的实例
+    }
+}
+
+// 方案 3：将搜索功能移到 modules/tools/search.js，不放在 core 层
+// 彻底避免 core 层和 modules 层的双向依赖
+```
 
 ### 5.5 可维护性问题
 
