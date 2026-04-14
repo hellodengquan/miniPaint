@@ -82,8 +82,23 @@ class Base_search_class {
 
 ### 2.3 search 方法完整调用流程
 
+**触发入口有两种方式**：
+
+```javascript
+// base-search.js events() 中的 keydown 监听
+if (code == "F3" || ( (event.ctrlKey == true || event.metaKey) && code == "f")) {
+    this.search();
+    event.preventDefault();
+}
 ```
-用户按下 F3
+
+**方式一：按 F3 键**
+**方式二：按 Ctrl+F（Windows/Linux）或 Cmd+F（macOS）**
+
+两种方式都会触发相同的 `search()` 方法，流程如下：
+
+```
+用户按下 F3 或 Ctrl/Cmd+F
     │
     ▼
 events() 中的 keydown 监听器捕获
@@ -393,7 +408,7 @@ node.appendChild(div);
 
 ### 5.4 循环依赖分析
 
-**依赖关系**:
+**静态 import 依赖关系**:
 ```
 base-search.js
     ├── import Dialog_class from './../libs/popup.js'
@@ -406,12 +421,78 @@ base-gui.js
     └── import Tools_translate_class from './../modules/tools/translate.js'
 ```
 
-**分析**:
-- `base-search.js` → `base-gui.js`: 单向依赖，无循环
-- `popup.js` → `base-gui.js`: 单向依赖，无循环
-- `base-search.js` 和 `popup.js` 都依赖 `base-gui.js`，但彼此独立
+**静态分析结论**: 从静态 import 看，`base-search.js` → `base-gui.js` 是单向依赖，无循环。
 
-**结论**: 当前架构没有循环依赖问题。
+**但需要进一步分析动态加载链**：
+
+`base-gui.js` 的 `load_modules()` 方法会动态加载 `modules/` 目录下的所有模块：
+
+```javascript
+// base-gui.js
+load_modules() {
+    var modules_context = require.context("./../modules/", true, /\.js$/);
+    modules_context.keys().forEach(function (key) {
+        // ...
+        _this.modules[moduleKey] = new classObj.default();
+    });
+}
+```
+
+其中包括 `modules/tools/search.js`：
+
+```javascript
+// modules/tools/search.js
+import Base_search_class from './../../core/base-search.js';
+
+class Tools_search_class {
+    constructor() {
+        this.Base_search = new Base_search_class();
+    }
+    // ...
+}
+```
+
+**完整依赖链**:
+```
+main.js
+    │
+    ├─► import Base_search_class from './core/base-search.js'
+    │       │
+    │       └─► import Base_gui_class from './core/base-gui.js'
+    │
+    └─► import Base_gui_class from './core/base-gui.js'
+            │
+            └─► GUI.init() → load_modules()
+                    │
+                    └─► 动态加载 modules/tools/search.js
+                            │
+                            └─► import Base_search_class from './../../core/base-search.js'
+                                    │
+                                    └─► 此时 Base_search_class 已加载（单例），不会重复执行
+```
+
+**关键时序分析**:
+
+1. `main.js` 首先静态 import `Base_search_class`，触发其构造函数执行
+2. `Base_search_class` 构造函数中 import `Base_gui_class`，此时 `Base_gui_class` 被加载
+3. `main.js` 中 `new Base_search_class()` 执行，单例实例创建完成
+4. 随后 `GUI.init()` 调用 `load_modules()`
+5. `load_modules()` 动态加载 `modules/tools/search.js`
+6. `Tools_search_class` 中 `new Base_search_class()` 返回已存在的单例实例
+
+**为什么没有循环依赖问题？**
+
+1. **静态 import 在模块解析阶段完成**：ES6 模块的 import 是静态的，在代码执行前就已完成绑定
+2. **单例模式保护**：`Base_search_class` 使用单例模式，第二次实例化时直接返回已存在的实例
+3. **加载顺序正确**：`main.js` 先加载 `Base_search_class`，再调用 `GUI.init()` 加载 modules
+
+**潜在风险**:
+
+如果调整加载顺序，例如在 `Base_search_class` 构造函数完成前就触发 `load_modules()`，可能会导致问题。但当前实现中：
+- `main.js` 中 `new Base_search_class()` 在 `GUI.init()` 之前执行
+- 这保证了单例实例在 modules 加载前就已创建
+
+**结论**: 当前架构没有循环依赖问题，单例模式 + 正确的加载顺序确保了安全。
 
 ### 5.5 菜单结构变化适应性
 
