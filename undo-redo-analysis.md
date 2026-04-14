@@ -223,14 +223,18 @@ if (this.action_history.length > this.action_history_max) {
 }
 ```
 
-**Bug 风险**：达到 50 步上限后，`action_history_index` 停止增长，历史游标与数组开始错位！
+✅ **设计正确**：滑动窗口机制是巧妙的，没有 bug！
+
+达到上限后 index 恒等于数组长度（50），形成完美对齐的滑动窗口：
+- `action_history.shift()` 弹出队首
+- index 保持 50 不变
+- undo 从 50→0 正好遍历完整 50 条记录
+
+> ⚠️ **报告勘误**：之前游标错位分析错误，感谢用户指出！
 
 ### 5.3 潜在问题分析
 
-#### ① 状态不一致风险
-**场景**：用户在第 50 步执行新操作，第 1 步被回收但游标仍为 50。连续 undo 49 次后到达索引 1，第 0 步已无法访问。
-
-#### ② 旧引用残留
+#### ① 旧引用残留
 **高风险点**：`update-layer-image.js:31` 存储 `reference_layer` 强引用
 - Action 被 free 后置 null → ✅ 安全
 - Action 仍在历史中 → ⚠️ 图层对象无法 GC
@@ -256,10 +260,9 @@ if (this.action_history.length > this.action_history_max) {
 
 ### 核心改进建议
 
-1. **游标错位修复**：超限时 `action_history_index` 同步递减
-2. **引用弱化**：图层只存 id，不存对象引用
-3. **redo 分支保留**：不截断历史，支持多分支时间线
-4. **free 错误重试**：单次失败不放弃整个清理流程
+1. **引用弱化**：图层只存 id，不存对象引用
+2. **redo 分支保留**：不截断历史，支持多分支时间线
+3. **free 错误重试**：单次失败不放弃整个清理流程
 
 ---
 
